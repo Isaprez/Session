@@ -14,6 +14,15 @@
 		92AC856E2F646DCC00E89FD6 /* SessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92AC856D2F646DCC00E89FD6 /* SessionTests.swift */; };
 		92AC85782F646DCD00E89FD6 /* SessionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92AC85772F646DCD00E89FD6 /* SessionUITests.swift */; };
 		92AC857A2F646DCD00E89FD6 /* SessionUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92AC85792F646DCD00E89FD6 /* SessionUITestsLaunchTests.swift */; };
+		AA00000120000001000000A1 /* Track.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000220000001000000A1 /* Track.swift */; };
+		AA00000320000001000000A1 /* Session.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000420000001000000A1 /* Session.swift */; };
+		AA00000520000001000000A1 /* AudioEngineManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000620000001000000A1 /* AudioEngineManager.swift */; };
+		AA00000720000001000000A1 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000820000001000000A1 /* SessionListView.swift */; };
+
+		AA00000B20000001000000A1 /* TransportBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000C20000001000000A1 /* TransportBar.swift */; };
+		AA00000D20000001000000A1 /* TrackRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000E20000001000000A1 /* TrackRowView.swift */; };
+		AA00000F20000001000000A1 /* EQView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00001020000001000000A1 /* EQView.swift */; };
+		BB00000130000001000000A1 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000230000001000000A1 /* SettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -44,6 +53,15 @@
 		92AC85732F646DCC00E89FD6 /* SessionUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SessionUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		92AC85772F646DCD00E89FD6 /* SessionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionUITests.swift; sourceTree = "<group>"; };
 		92AC85792F646DCD00E89FD6 /* SessionUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionUITestsLaunchTests.swift; sourceTree = "<group>"; };
+		AA00000220000001000000A1 /* Track.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Track.swift; sourceTree = "<group>"; };
+		AA00000420000001000000A1 /* Session.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Session.swift; sourceTree = "<group>"; };
+		AA00000620000001000000A1 /* AudioEngineManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioEngineManager.swift; sourceTree = "<group>"; };
+		AA00000820000001000000A1 /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
+
+		AA00000C20000001000000A1 /* TransportBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportBar.swift; sourceTree = "<group>"; };
+		AA00000E20000001000000A1 /* TrackRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackRowView.swift; sourceTree = "<group>"; };
+		AA00001020000001000000A1 /* EQView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EQView.swift; sourceTree = "<group>"; };
+		BB00000230000001000000A1 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -96,10 +114,50 @@
 			children = (
 				92AC855C2F646DCA00E89FD6 /* SessionApp.swift */,
 				92AC855E2F646DCA00E89FD6 /* ContentView.swift */,
+				AA00002020000001000000A1 /* Models */,
+				AA00002120000001000000A1 /* Audio */,
+				AA00002220000001000000A1 /* Views */,
 				92AC85602F646DCC00E89FD6 /* Assets.xcassets */,
 				92AC85622F646DCC00E89FD6 /* Preview Content */,
 			);
 			path = Session;
+			sourceTree = "<group>";
+		};
+		AA00002020000001000000A1 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000220000001000000A1 /* Track.swift */,
+				AA00000420000001000000A1 /* Session.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		AA00002120000001000000A1 /* Audio */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000620000001000000A1 /* AudioEngineManager.swift */,
+			);
+			path = Audio;
+			sourceTree = "<group>";
+		};
+		AA00002220000001000000A1 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000820000001000000A1 /* SessionListView.swift */,
+				BB00000230000001000000A1 /* SettingsView.swift */,
+				AA00002320000001000000A1 /* Components */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		AA00002320000001000000A1 /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000C20000001000000A1 /* TransportBar.swift */,
+				AA00000E20000001000000A1 /* TrackRowView.swift */,
+				AA00001020000001000000A1 /* EQView.swift */,
+			);
+			path = Components;
 			sourceTree = "<group>";
 		};
 		92AC85622F646DCC00E89FD6 /* Preview Content */ = {
@@ -259,6 +317,15 @@
 			files = (
 				92AC855F2F646DCA00E89FD6 /* ContentView.swift in Sources */,
 				92AC855D2F646DCA00E89FD6 /* SessionApp.swift in Sources */,
+				AA00000120000001000000A1 /* Track.swift in Sources */,
+				AA00000320000001000000A1 /* Session.swift in Sources */,
+				AA00000520000001000000A1 /* AudioEngineManager.swift in Sources */,
+				AA00000720000001000000A1 /* SessionListView.swift in Sources */,
+
+				AA00000B20000001000000A1 /* TransportBar.swift in Sources */,
+				AA00000D20000001000000A1 /* TrackRowView.swift in Sources */,
+				AA00000F20000001000000A1 /* EQView.swift in Sources */,
+				BB00000130000001000000A1 /* SettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -423,8 +490,8 @@
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -452,8 +519,8 @@
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
