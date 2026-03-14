@@ -212,10 +212,7 @@ struct WaveformBar: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .contentShape(Rectangle())
             .onTapGesture(count: 2) {
-                if isEditMode {
-                    let off = scrollOff(viewWidth: viewWidth)
-                    // Position computed in gesture overlay
-                }
+                // Consumed to prevent conflict; actual handling in simultaneousGesture below
             }
             .simultaneousGesture(
                 SpatialTapGesture(count: 2)
