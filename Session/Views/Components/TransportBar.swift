@@ -1,9 +1,13 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct WaveformBar: View {
     let progress: CGFloat
     let levelHistory: [Float]
+    var levelHistoryZoom1: [Float] = []
+    var levelHistoryZoom2: [Float] = []
     let isPlaying: Bool
+    var isGeneratingWaveform: Bool = false
     let onSeek: (CGFloat) -> Void
     var bpm: Double = 0
     var timeSignatureNumerator: Int = 4
@@ -33,6 +37,17 @@ struct WaveformBar: View {
     }
 
     @State private var draggingMarkerId: UUID? = nil
+    @State private var manualScrollOffset: CGFloat? = nil
+    @State private var scrollReturnTimer: Timer? = nil
+    @State private var dragStartOffset: CGFloat? = nil
+
+    private var activeHistory: [Float] {
+        switch zoomLevel {
+        case 1: return levelHistoryZoom1.isEmpty ? levelHistory : levelHistoryZoom1
+        case 2: return levelHistoryZoom2.isEmpty ? (levelHistoryZoom1.isEmpty ? levelHistory : levelHistoryZoom1) : levelHistoryZoom2
+        default: return levelHistory
+        }
+    }
 
     private func computeZoomScale(viewWidth: CGFloat) -> CGFloat {
         guard zoomLevel > 0, bpm > 0, duration > 0 else { return 1.0 }
@@ -47,7 +62,7 @@ struct WaveformBar: View {
         return max(targetWidth / currentMeasureWidth, 1.0)
     }
 
-    private func scrollOff(viewWidth: CGFloat) -> CGFloat {
+    private func autoScrollOff(viewWidth: CGFloat) -> CGFloat {
         let scale = computeZoomScale(viewWidth: viewWidth)
         let cw = viewWidth * scale
         guard zoomLevel > 0 else { return 0 }
@@ -55,6 +70,24 @@ struct WaveformBar: View {
         let currentX = progress * cw
         let maxOffset = cw - viewWidth
         return min(max(currentX - fixedX, 0), max(maxOffset, 0))
+    }
+
+    private func scrollOff(viewWidth: CGFloat) -> CGFloat {
+        if let manual = manualScrollOffset {
+            return manual
+        }
+        return autoScrollOff(viewWidth: viewWidth)
+    }
+
+    private func startScrollReturnTimer() {
+        scrollReturnTimer?.invalidate()
+        scrollReturnTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+            DispatchQueue.main.async {
+                withAnimation(.easeInOut(duration: 0.4)) {
+                    manualScrollOffset = nil
+                }
+            }
+        }
     }
 
     var body: some View {
@@ -129,7 +162,8 @@ struct WaveformBar: View {
                     }
 
                     // Waveform bars (only visible range)
-                    let count = levelHistory.count
+                    let waveData = activeHistory
+                    let count = waveData.count
                     if count > 0 {
                         let slotWidth = cw / CGFloat(count)
                         let midY = size.height / 2
@@ -138,7 +172,7 @@ struct WaveformBar: View {
 
                         if firstSlot <= lastSlot {
                             for i in firstSlot...lastSlot {
-                                let level = levelHistory[i]
+                                let level = waveData[i]
                                 let x = CGFloat(i) * slotWidth + slotWidth / 2 - ox
                                 let barH = max(CGFloat(level) * size.height * 0.9, 1)
                                 let barW = max(slotWidth - 1, 1)
@@ -184,6 +218,13 @@ struct WaveformBar: View {
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 6))
 
+                // Loading indicator while waveform generates
+                if isGeneratingWaveform && levelHistory.allSatisfy({ $0 == 0 }) {
+                    ProgressView()
+                        .tint(.green)
+                        .scaleEffect(0.8)
+                }
+
                 // Drag handles for markers (edit mode only)
                 if isEditMode {
                     ForEach(sorted, id: \.id) { marker in
@@ -210,6 +251,12 @@ struct WaveformBar: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 6))
+            .onChange(of: zoomLevel) { newZoom in
+                if newZoom == 0 {
+                    manualScrollOffset = nil
+                    scrollReturnTimer?.invalidate()
+                }
+            }
             .contentShape(Rectangle())
             .onTapGesture(count: 2) {
                 // Consumed to prevent conflict; actual handling in simultaneousGesture below
@@ -225,13 +272,31 @@ struct WaveformBar: View {
                     }
             )
             .gesture(
-                isPlaying || isEditMode ? nil :
+                isZoomed ?
+                DragGesture(minimumDistance: 10)
+                    .onChanged { value in
+                        if dragStartOffset == nil {
+                            dragStartOffset = manualScrollOffset ?? autoScrollOff(viewWidth: viewWidth)
+                        }
+                        let maxOff = max(contentWidth - viewWidth, 0)
+                        let newOff = dragStartOffset! - value.translation.width
+                        manualScrollOffset = min(max(newOff, 0), maxOff)
+                    }
+                    .onEnded { _ in
+                        dragStartOffset = nil
+                        startScrollReturnTimer()
+                    }
+                : nil
+            )
+            .gesture(
+                !isPlaying && !isEditMode && !isZoomed ?
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
                         let off = scrollOff(viewWidth: viewWidth)
                         let pct = min(max((value.location.x + off) / contentWidth, 0), 1)
                         onSeek(pct)
                     }
+                : nil
             )
         }
     }
@@ -279,10 +344,13 @@ struct TransportBar: View {
     @Binding var endTime: TimeInterval
     @Binding var autoFadeAt: TimeInterval
     let maxDuration: TimeInterval
-    let sessionMenuContent: AnyView
+    let onSessionMenuTap: () -> Void
     let sessionName: String
     var masterLevel: Float = 0
     var levelHistory: [Float] = []
+    var levelHistoryZoom1: [Float] = []
+    var levelHistoryZoom2: [Float] = []
+    var isGeneratingWaveform: Bool = false
     let onSeek: (TimeInterval) -> Void
     @Binding var bpm: Double
     var originalBpm: Double
@@ -292,6 +360,7 @@ struct TransportBar: View {
     var timeSignatureDenominator: Int
 
     @State private var blinkVisible = true
+    @Binding var showSessionMenu: Bool
     @Binding var showTimeMenu: Bool
     @Binding var showBpmMenu: Bool
     @Binding var showKeyMenu: Bool
@@ -306,9 +375,14 @@ struct TransportBar: View {
         VStack(spacing: 8) {
             // Controls
             HStack(spacing: 6) {
-                // Session menu
-                transportButton(icon: "line.3.horizontal") {}
-                    .overlay { Menu { sessionMenuContent } label: { Color.clear } }
+                // Session menu + name
+                transportButton(icon: "line.3.horizontal", action: onSessionMenuTap)
+
+                Text(sessionName)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.85))
+                    .lineLimit(1)
+                    .frame(maxWidth: 120, alignment: .leading)
 
                 Spacer()
 
@@ -357,13 +431,14 @@ struct TransportBar: View {
                     // Time
                     Text("\(formatTime(currentTime)) / \(formatTime(duration))")
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.85))
+                        .foregroundColor(hasTimeChanges ? .orange : .white.opacity(0.85))
                         .frame(height: 32)
                         .padding(.horizontal, 8)
                         .background(Color.white.opacity(0.1))
                         .cornerRadius(6)
                         .contentShape(Rectangle())
                         .onTapGesture {
+                            showSessionMenu = false
                             showBpmMenu = false
                             showKeyMenu = false
                             showTimeMenu.toggle()
@@ -378,6 +453,7 @@ struct TransportBar: View {
                         .cornerRadius(6)
                         .contentShape(Rectangle())
                         .onTapGesture {
+                            showSessionMenu = false
                             showTimeMenu = false
                             showKeyMenu = false
                             showBpmMenu.toggle()
@@ -392,6 +468,7 @@ struct TransportBar: View {
                         .cornerRadius(6)
                         .contentShape(Rectangle())
                         .onTapGesture {
+                            showSessionMenu = false
                             showTimeMenu = false
                             showBpmMenu = false
                             showKeyMenu.toggle()
@@ -400,23 +477,8 @@ struct TransportBar: View {
 
                 Spacer()
 
-                // Edit mode
-                Image(systemName: "pencil")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(isEditMode ? .orange : .white.opacity(0.85))
-                    .frame(width: 32, height: 32)
-                    .background(isEditMode ? Color.orange.opacity(0.2) : Color.white.opacity(0.1))
-                    .cornerRadius(6)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        isEditMode.toggle()
-                        if isEditMode && markers.isEmpty {
-                            markers.append(SectionMarker(name: "Start", position: 0))
-                        }
-                    }
-
-                // Save markers (visible when markers exist)
-                if !markers.isEmpty {
+                // Save markers (only in edit mode)
+                if isEditMode && !markers.isEmpty {
                     Image(systemName: showMarkersSaved ? "checkmark" : "square.and.arrow.down")
                         .font(.system(size: 14, weight: .medium))
                         .foregroundColor(showMarkersSaved ? .green : .white.opacity(0.85))
@@ -433,6 +495,21 @@ struct TransportBar: View {
                         }
                 }
 
+                // Edit mode
+                Image(systemName: "pencil")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(isEditMode ? .orange : .white.opacity(0.85))
+                    .frame(width: 32, height: 32)
+                    .background(isEditMode ? Color.orange.opacity(0.2) : Color.white.opacity(0.1))
+                    .cornerRadius(6)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        isEditMode.toggle()
+                        if isEditMode && markers.isEmpty {
+                            markers.append(SectionMarker(name: "Start", position: 0))
+                        }
+                    }
+
                 // Settings
                 transportButton(icon: "gearshape", action: onSettingsTap)
             }
@@ -443,10 +520,12 @@ struct TransportBar: View {
                 WaveformBar(
                     progress: duration > 0 ? CGFloat(currentTime / duration) : 0,
                     levelHistory: levelHistory,
+                    levelHistoryZoom1: levelHistoryZoom1,
+                    levelHistoryZoom2: levelHistoryZoom2,
                     isPlaying: isPlaying,
+                    isGeneratingWaveform: isGeneratingWaveform,
                     onSeek: { pct in
                         let seekTime = Double(pct) * maxDuration
-                        startOffset = seekTime
                         onSeek(seekTime)
                     },
                     bpm: bpm,
@@ -494,6 +573,10 @@ struct TransportBar: View {
                 blinkVisible = true
             }
         }
+    }
+
+    private var hasTimeChanges: Bool {
+        startOffset > 0 || endTime > 0 || autoFadeAt > 0
     }
 
     private func startBlinking() {
@@ -804,6 +887,201 @@ struct KeyPopover: View {
         .background(.ultraThinMaterial)
         .cornerRadius(12)
         .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
+    }
+}
+
+// MARK: - Session Menu Popover
+
+struct SessionMenuPopover: View {
+    @Binding var sessions: [MusicSession]
+    let currentSession: MusicSession?
+    var sessionTransitionModes: [UUID: TransitionMode]
+    let onSelect: (MusicSession) -> Void
+    let onDelete: (MusicSession) -> Void
+    let onTransitionChange: (MusicSession, TransitionMode) -> Void
+    let onReorder: ([MusicSession]) -> Void
+    let onImport: () -> Void
+    let onDismiss: () -> Void
+    @State private var sessionToDelete: MusicSession? = nil
+    @State private var showDeleteConfirm = false
+    @State private var expandedTransitionId: UUID? = nil
+    @State private var draggingSession: MusicSession? = nil
+
+    private func modeFor(_ session: MusicSession) -> TransitionMode {
+        sessionTransitionModes[session.id] ?? .stop
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Header
+            HStack(spacing: 8) {
+                Text("Sesiones")
+                    .font(.caption.bold())
+
+                Spacer()
+
+                Button(action: onImport) {
+                    Image(systemName: "folder.badge.plus")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            Divider()
+
+            ScrollView {
+                VStack(spacing: 4) {
+                    ForEach(sessions) { s in
+                        VStack(spacing: 0) {
+                            HStack(spacing: 6) {
+                                // Session info (tap to select)
+                                Button(action: { onSelect(s) }) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(s.name)
+                                            .font(.subheadline)
+                                            .lineLimit(1)
+                                            .foregroundColor(.primary)
+                                        Text("\(s.timeSignatureNumerator)/\(s.timeSignatureDenominator)  \(Int(s.bpm)) BPM  \(s.musicalKey)")
+                                            .font(.system(size: 9))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 5)
+                                    .padding(.horizontal, 8)
+                                    .background(s.id == currentSession?.id ? Color.green.opacity(0.1) : Color.clear)
+                                    .cornerRadius(6)
+                                }
+                                .buttonStyle(.plain)
+                                .onDrag {
+                                    draggingSession = s
+                                    return NSItemProvider(object: s.id.uuidString as NSString)
+                                }
+
+                                // Transition mode icon button
+                                Button(action: {
+                                    withAnimation(.easeOut(duration: 0.15)) {
+                                        expandedTransitionId = expandedTransitionId == s.id ? nil : s.id
+                                    }
+                                }) {
+                                    let mode = modeFor(s)
+                                    Image(systemName: mode.icon)
+                                        .font(.system(size: 10))
+                                        .foregroundColor(mode == .stop ? .secondary : .accentColor)
+                                        .frame(width: 22, height: 22)
+                                        .background(mode == .stop ? Color.secondary.opacity(0.1) : Color.accentColor.opacity(0.15))
+                                        .cornerRadius(5)
+                                }
+                                .buttonStyle(.plain)
+
+                                // Delete
+                                Button(action: {
+                                    sessionToDelete = s
+                                    showDeleteConfirm = true
+                                }) {
+                                    Image(systemName: "trash")
+                                        .font(.caption)
+                                        .foregroundColor(.red.opacity(0.7))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .onDrop(of: [.text], delegate: SessionDropDelegate(
+                                session: s,
+                                sessions: $sessions,
+                                draggingSession: $draggingSession,
+                                onReorder: onReorder
+                            ))
+
+                            // Expanded transition picker for this session
+                            if expandedTransitionId == s.id {
+                                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 3), spacing: 3) {
+                                    ForEach(TransitionMode.allCases, id: \.self) { mode in
+                                        Button(action: {
+                                            onTransitionChange(s, mode)
+                                            withAnimation(.easeOut(duration: 0.15)) {
+                                                expandedTransitionId = nil
+                                            }
+                                        }) {
+                                            let current = modeFor(s)
+                                            VStack(spacing: 1) {
+                                                Image(systemName: mode.icon)
+                                                    .font(.system(size: 10))
+                                                Text(mode.displayName)
+                                                    .font(.system(size: 6, weight: .medium))
+                                            }
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 4)
+                                            .background(
+                                                current == mode ? Color.accentColor : Color.secondary.opacity(0.1)
+                                            )
+                                            .foregroundColor(current == mode ? .white : .primary)
+                                            .cornerRadius(4)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(.leading, 24)
+                                .padding(.top, 4)
+                                .padding(.bottom, 4)
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 280)
+        }
+        .padding(12)
+        .frame(width: 240)
+        .background(.ultraThinMaterial)
+        .cornerRadius(12)
+        .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
+        .alert("Eliminar sesión", isPresented: $showDeleteConfirm) {
+            Button("Cancelar", role: .cancel) {
+                sessionToDelete = nil
+            }
+            Button("Eliminar", role: .destructive) {
+                if let s = sessionToDelete {
+                    onDelete(s)
+                    sessionToDelete = nil
+                }
+            }
+        } message: {
+            Text("¿Eliminar \"\(sessionToDelete?.name ?? "")\"? Se borrarán todos los archivos.")
+        }
+    }
+}
+
+struct SessionDropDelegate: DropDelegate {
+    let session: MusicSession
+    @Binding var sessions: [MusicSession]
+    @Binding var draggingSession: MusicSession?
+    let onReorder: ([MusicSession]) -> Void
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggingSession = nil
+        onReorder(sessions)
+        return true
+    }
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging = draggingSession,
+              dragging.id != session.id,
+              let fromIndex = sessions.firstIndex(where: { $0.id == dragging.id }),
+              let toIndex = sessions.firstIndex(where: { $0.id == session.id })
+        else { return }
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            sessions.move(fromOffsets: IndexSet(integer: fromIndex), toOffset: toIndex > fromIndex ? toIndex + 1 : toIndex)
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
     }
 }
 

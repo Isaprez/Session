@@ -23,6 +23,7 @@
 		AA00000F20000001000000A1 /* EQView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00001020000001000000A1 /* EQView.swift */; };
 		BB00000130000001000000A1 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000230000001000000A1 /* SettingsView.swift */; };
 		CC00000140000001000000A1 /* SessionConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC00000240000001000000A1 /* SessionConfig.swift */; };
+		DD00000150000001000000A1 /* TransitionMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD00000250000001000000A1 /* TransitionMode.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -62,6 +63,7 @@
 		AA00001020000001000000A1 /* EQView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EQView.swift; sourceTree = "<group>"; };
 		BB00000230000001000000A1 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		CC00000240000001000000A1 /* SessionConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionConfig.swift; sourceTree = "<group>"; };
+		DD00000250000001000000A1 /* TransitionMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransitionMode.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -154,6 +156,7 @@
 				AA00000220000001000000A1 /* Track.swift */,
 				AA00000420000001000000A1 /* Session.swift */,
 				CC00000240000001000000A1 /* SessionConfig.swift */,
+				DD00000250000001000000A1 /* TransitionMode.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -327,6 +330,7 @@
 				AA00000F20000001000000A1 /* EQView.swift in Sources */,
 				BB00000130000001000000A1 /* SettingsView.swift in Sources */,
 				CC00000140000001000000A1 /* SessionConfig.swift in Sources */,
+				DD00000150000001000000A1 /* TransitionMode.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -496,7 +500,7 @@
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UIBackgroundModes = "(audio)";
+				INFOPLIST_FILE = Session/Info.plist;
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -526,7 +530,7 @@
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UIBackgroundModes = "(audio)";
+				INFOPLIST_FILE = Session/Info.plist;
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

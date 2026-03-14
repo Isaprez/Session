@@ -2,8 +2,8 @@ import Foundation
 
 struct MusicSession: Identifiable {
     let id = UUID()
-    let name: String
-    let folderURL: URL
+    var name: String
+    var folderURL: URL
     var tracks: [Track]
     var bpm: Double = 120
     var timeSignatureNumerator: Int = 4

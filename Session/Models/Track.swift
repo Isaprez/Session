@@ -17,7 +17,7 @@ struct SectionMarker: Identifiable, Equatable {
 struct Track: Identifiable {
     let id = UUID()
     let name: String
-    let fileURL: URL
+    var fileURL: URL
     var volume: Float = 1.0
     var pan: Float = 0.0
     var isMuted: Bool = false
@@ -25,6 +25,8 @@ struct Track: Identifiable {
     var eqBands: [EQBand] = EQBand.defaultBands
 
     var displayName: String {
+        if isClick { return "Click" }
+        if isCues { return "Cues" }
         let filename = fileURL.deletingPathExtension().lastPathComponent
         return filename
             .replacingOccurrences(of: "_", with: " ")
@@ -33,11 +35,13 @@ struct Track: Identifiable {
     }
 
     var isClick: Bool {
-        name.lowercased().contains("click")
+        let lower = name.lowercased()
+        return lower.contains("click") || lower.contains("clic")
     }
 
     var isCues: Bool {
-        name.lowercased().contains("cue")
+        let lower = name.lowercased()
+        return lower.contains("cue") || lower.contains("guia") || lower.contains("guía")
     }
 
     var isSpecial: Bool {

@@ -1,4 +1,5 @@
 import AVFoundation
+import Accelerate
 import Combine
 
 class AudioEngineManager: ObservableObject {
@@ -40,8 +41,12 @@ class AudioEngineManager: ObservableObject {
 
     @Published var trackLevels: [UUID: Float] = [:]
     @Published var masterLevel: Float = 0
-    @Published var levelHistory: [Float] = []
-    private let levelHistorySlots = 1200
+    @Published var levelHistory: [Float] = []       // zoom 0
+    @Published var levelHistoryZoom1: [Float] = []  // zoom 1
+    @Published var levelHistoryZoom2: [Float] = []  // zoom 2
+    private let slotsZoom0 = 400
+    private let slotsZoom1 = 1200
+    private let slotsZoom2 = 3600
     @Published var startOffset: TimeInterval = 0
     @Published var endTime: TimeInterval = 0 // 0 = use full duration
     @Published var autoFadeAt: TimeInterval = 0 // 0 = disabled
@@ -49,8 +54,15 @@ class AudioEngineManager: ObservableObject {
 
     // Section repeat
     @Published var isRepeatingSection = false
+    @Published var isGeneratingWaveform = false
     var repeatSectionStart: TimeInterval = 0
     var repeatSectionEnd: TimeInterval = 0
+
+    // Transition
+    @Published var transitionMode: TransitionMode = .stop
+    var transitionDuration: Float = 5.0
+    var onTrackEnd: ((TransitionMode) -> Void)?
+    private var transitionTriggered = false
 
     private var displayLink: CADisplayLink?
     private var startSampleTime: AVAudioFramePosition = 0
@@ -132,62 +144,109 @@ class AudioEngineManager: ObservableObject {
             print("Error starting audio engine: \(error)")
         }
 
-        // Pre-compute waveform from all tracks
+        // Pre-compute waveform in background
         generateWaveform(session: session)
-    }
-
-    private func generateWaveform(session: MusicSession) {
-        let slots = levelHistorySlots
-        var waveform = Array(repeating: Float(0), count: slots)
-
-        for track in session.tracks {
-            // Skip click tracks from waveform display
-            if track.isClick { continue }
-            guard let file = try? AVAudioFile(forReading: track.fileURL) else { continue }
-            let totalFrames = file.length
-            let framesPerSlot = max(totalFrames / Int64(slots), 1)
-            let bufferSize = AVAudioFrameCount(framesPerSlot)
-
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: bufferSize) else { continue }
-
-            file.framePosition = 0
-            for slot in 0..<slots {
-                buffer.frameLength = 0
-                do {
-                    try file.read(into: buffer, frameCount: min(bufferSize, AVAudioFrameCount(totalFrames - file.framePosition)))
-                } catch { break }
-
-                guard buffer.frameLength > 0 else { break }
-
-                let level = rmsLevel(buffer: buffer)
-                waveform[slot] = max(waveform[slot], level)
-            }
-        }
-
-        levelHistory = waveform
     }
 
     private func rmsLevel(buffer: AVAudioPCMBuffer) -> Float {
         guard let channelData = buffer.floatChannelData else { return 0 }
         let channelCount = Int(buffer.format.channelCount)
-        let frameLength = Int(buffer.frameLength)
-        guard frameLength > 0 else { return 0 }
+        let length = Int(buffer.frameLength)
+        guard length > 0 else { return 0 }
 
-        var totalRMS: Float = 0
+        var maxRMS: Float = 0
         for ch in 0..<channelCount {
-            let data = channelData[ch]
-            var sum: Float = 0
-            for i in 0..<frameLength {
-                sum += data[i] * data[i]
-            }
-            totalRMS += sqrtf(sum / Float(frameLength))
+            let ptr = channelData[ch]
+            var sumSq: Float = 0
+            vDSP_dotpr(ptr, 1, ptr, 1, &sumSq, vDSP_Length(length))
+            let rms = sqrtf(sumSq / Float(length))
+            maxRMS = max(maxRMS, rms)
         }
-        let avgRMS = totalRMS / Float(channelCount)
-        // Logarithmic scaling for more expressive waveform
-        let db = 20 * log10(max(avgRMS, 1e-6))
-        // Map -40dB...0dB to 0...1
-        let normalized = (db + 40) / 40
-        return min(max(normalized, 0), 1.0)
+        return maxRMS
+    }
+
+    private func generateWaveform(session: MusicSession) {
+        let tracks = session.tracks
+        let s0 = slotsZoom0
+        let s1 = slotsZoom1
+        let s2 = slotsZoom2
+
+        DispatchQueue.main.async { self.isGeneratingWaveform = true }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+
+            // Generate 3 resolutions progressively
+            let waveform0 = self.computeWaveform(tracks: tracks, slots: s0)
+            DispatchQueue.main.async {
+                self.levelHistory = waveform0
+                self.isGeneratingWaveform = false
+            }
+
+            let waveform1 = self.computeWaveform(tracks: tracks, slots: s1)
+            DispatchQueue.main.async {
+                self.levelHistoryZoom1 = waveform1
+            }
+
+            let waveform2 = self.computeWaveform(tracks: tracks, slots: s2)
+            DispatchQueue.main.async {
+                self.levelHistoryZoom2 = waveform2
+            }
+        }
+    }
+
+    private func computeWaveform(tracks: [Track], slots: Int) -> [Float] {
+        var waveform = Array(repeating: Float(0), count: slots)
+
+        for track in tracks {
+            if track.isSpecial { continue }
+            guard let file = try? AVAudioFile(forReading: track.fileURL) else { continue }
+            let totalFrames = Int(file.length)
+            guard totalFrames > 0 else { continue }
+            let framesPerSlot = totalFrames / slots
+
+            let chunkSlots = 64
+            let chunkFrames = AVAudioFrameCount(framesPerSlot * chunkSlots)
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: chunkFrames) else { continue }
+
+            file.framePosition = 0
+            var slot = 0
+
+            while slot < slots {
+                buffer.frameLength = 0
+                let remaining = AVAudioFrameCount(totalFrames - Int(file.framePosition))
+                guard remaining > 0 else { break }
+                do {
+                    try file.read(into: buffer, frameCount: min(chunkFrames, remaining))
+                } catch { break }
+                guard buffer.frameLength > 0, let channelData = buffer.floatChannelData else { break }
+
+                let channelCount = Int(buffer.format.channelCount)
+                let frameLen = Int(buffer.frameLength)
+                let slotsInChunk = min(frameLen / max(framesPerSlot, 1), slots - slot)
+
+                for s in 0..<slotsInChunk {
+                    let start = s * framesPerSlot
+                    let end = min(start + framesPerSlot, frameLen)
+                    let count = end - start
+                    guard count > 0 else { continue }
+
+                    var maxRMS: Float = 0
+                    for ch in 0..<channelCount {
+                        let ptr = channelData[ch].advanced(by: start)
+                        var sumSq: Float = 0
+                        vDSP_dotpr(ptr, 1, ptr, 1, &sumSq, vDSP_Length(count))
+                        let rms = sqrtf(sumSq / Float(count))
+                        maxRMS = max(maxRMS, rms)
+                    }
+                    let db = 20 * log10f(max(maxRMS, 1e-6))
+                    let normalized = min(max((db + 40) / 40, 0), 1.0)
+                    waveform[slot + s] = max(waveform[slot + s], normalized)
+                }
+                slot += slotsInChunk
+            }
+        }
+
+        return waveform
     }
 
     func play() {
@@ -256,6 +315,7 @@ class AudioEngineManager: ObservableObject {
         isPaused = false
         currentTime = 0
         autoFadeTriggered = false
+        transitionTriggered = false
         stopTimeTracking()
     }
 
@@ -388,13 +448,15 @@ class AudioEngineManager: ObservableObject {
         isFading = true
         let steps = 60
         let interval = TimeInterval(fadeDuration) / TimeInterval(steps)
-        let decrement = volumeBeforeFade / Float(steps)
         var currentStep = 0
 
         fadeTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] timer in
             guard let self = self else { timer.invalidate(); return }
             currentStep += 1
-            let newVol = self.volumeBeforeFade - decrement * Float(currentStep)
+            // Exponential curve: stays loud longer, then drops faster at the end
+            let progress = Float(currentStep) / Float(steps)
+            let curve = 1.0 - powf(progress, 3.0)
+            let newVol = self.volumeBeforeFade * curve
             DispatchQueue.main.async {
                 self.engine.mainMixerNode.outputVolume = max(newVol, 0)
                 self.masterVolume = max(newVol, 0)
@@ -490,8 +552,79 @@ class AudioEngineManager: ObservableObject {
 
             // Stop at endTime or duration
             let stopAt = self.endTime > 0 ? self.endTime : self.duration
+
+            // Pre-trigger for crossfade/overlap: start transition early
+            if (self.transitionMode == .crossfade || self.transitionMode == .overlap)
+                && !self.transitionTriggered
+                && self.transitionDuration > 0
+                && time >= stopAt - TimeInterval(self.transitionDuration) {
+                self.transitionTriggered = true
+                self.onTrackEnd?(self.transitionMode)
+            }
+
             if time >= stopAt {
-                self.stop()
+                self.handleTrackEnd()
+            }
+        }
+    }
+
+    // MARK: - Track End Handling
+
+    private func handleTrackEnd() {
+        switch transitionMode {
+        case .stop:
+            stop()
+        case .advance:
+            stop()
+            onTrackEnd?(.advance)
+        case .autoAdvance:
+            stop()
+            onTrackEnd?(.autoAdvance)
+        case .crossfade, .overlap:
+            // Pre-trigger already fired; just stop current
+            stop()
+        case .trigger:
+            stop()
+        }
+    }
+
+    func startTransitionFadeOut() {
+        guard transitionDuration > 0 else { return }
+        let steps = Int(transitionDuration * 30)
+        let interval = TimeInterval(transitionDuration) / TimeInterval(steps)
+        let startVol = engine.mainMixerNode.outputVolume
+        var currentStep = 0
+
+        fadeTimer?.invalidate()
+        fadeTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] timer in
+            guard let self = self else { timer.invalidate(); return }
+            currentStep += 1
+            let progress = Float(currentStep) / Float(steps)
+            let curve = 1.0 - powf(progress, 3.0)
+            self.engine.mainMixerNode.outputVolume = startVol * curve
+            if currentStep >= steps {
+                timer.invalidate()
+            }
+        }
+    }
+
+    func startTransitionFadeIn() {
+        guard transitionDuration > 0 else { return }
+        engine.mainMixerNode.outputVolume = 0
+        let steps = Int(transitionDuration * 30)
+        let interval = TimeInterval(transitionDuration) / TimeInterval(steps)
+        let targetVol = masterVolume
+        var currentStep = 0
+
+        fadeTimer?.invalidate()
+        fadeTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] timer in
+            guard let self = self else { timer.invalidate(); return }
+            currentStep += 1
+            let progress = Float(currentStep) / Float(steps)
+            self.engine.mainMixerNode.outputVolume = targetVol * progress
+            if currentStep >= steps {
+                timer.invalidate()
+                self.engine.mainMixerNode.outputVolume = targetVol
             }
         }
     }

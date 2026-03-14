@@ -13,6 +13,10 @@ struct SessionConfig: Codable {
     var autoFadeAt: Double
     var fadeDuration: Float
 
+    // Transition
+    var transitionMode: String?
+    var transitionDuration: Float?
+
     // Master
     var masterVolume: Float
 
