@@ -39,6 +39,8 @@ class AudioEngineManager: ObservableObject {
         case out, `in`
     }
 
+    private var currentSessionTracks: [Track] = []
+
     @Published var trackLevels: [UUID: Float] = [:]
     @Published var masterLevel: Float = 0
     @Published var levelHistory: [Float] = []       // zoom 0
@@ -47,9 +49,15 @@ class AudioEngineManager: ObservableObject {
     private let slotsZoom0 = 400
     private let slotsZoom1 = 1200
     private let slotsZoom2 = 3600
-    @Published var startOffset: TimeInterval = 0
+    @Published var startOffset: TimeInterval = 0 { // config: start time from time menu
+        didSet { if !isPlaying { playFrom = startOffset } }
+    }
+    private var playFrom: TimeInterval = 0       // actual seek position for playback
     @Published var endTime: TimeInterval = 0 // 0 = use full duration
     @Published var autoFadeAt: TimeInterval = 0 // 0 = disabled
+    @Published var gridOffset: TimeInterval = 0 // offset to align grid with actual beats
+    @Published var isDetectingGrid = false
+    @Published var gridDetected = false
     private var autoFadeTriggered = false
 
     // Section repeat
@@ -72,6 +80,7 @@ class AudioEngineManager: ObservableObject {
     func loadSession(_ session: MusicSession) {
         stop()
         tearDown()
+        currentSessionTracks = session.tracks
 
         // Determine common format from first track
         guard let firstFile = try? AVAudioFile(forReading: session.tracks[0].fileURL) else { return }
@@ -146,6 +155,11 @@ class AudioEngineManager: ObservableObject {
 
         // Pre-compute waveform in background
         generateWaveform(session: session)
+
+        // Auto-detect grid offset if not already set
+        if gridOffset == 0 {
+            detectGridOffset(tracks: session.tracks)
+        }
     }
 
     private func rmsLevel(buffer: AVAudioPCMBuffer) -> Float {
@@ -249,6 +263,236 @@ class AudioEngineManager: ObservableObject {
         return waveform
     }
 
+    // MARK: - Auto Grid Detection
+
+    func autoDetectGridOffset() {
+        isDetectingGrid = true
+        gridDetected = false
+        gridOffset = 0
+        print("[GridDetect] Starting auto-detection, tracks: \(currentSessionTracks.count), audioFiles: \(audioFiles.count)")
+        detectGridOffset(tracks: currentSessionTracks)
+    }
+
+    private func detectGridOffset(tracks: [Track]) {
+        let detectionBpm = originalBpm > 0 ? originalBpm : bpm
+        guard detectionBpm > 0 else {
+            print("[GridDetect] Aborted: bpm = 0")
+            DispatchQueue.main.async { self.isDetectingGrid = false }
+            return
+        }
+
+        DispatchQueue.main.async { self.isDetectingGrid = true }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+
+            // Prefer click track for detection (has clear accents), fallback to first music track
+            let clickTrack = tracks.first(where: { $0.isClick })
+            let analysisTrack = clickTrack ?? tracks.first(where: { !$0.isSpecial })
+
+            guard let track = analysisTrack else {
+                print("[GridDetect] No suitable track found")
+                DispatchQueue.main.async { self.isDetectingGrid = false }
+                return
+            }
+
+            let isClick = track.isClick
+            print("[GridDetect] Analyzing: \(track.name) (isClick: \(isClick))")
+            print("[GridDetect] BPM for detection: \(detectionBpm)")
+
+            // Open file for analysis — try URL first, then copy from existing
+            var file: AVAudioFile?
+            if let f = try? AVAudioFile(forReading: track.fileURL) {
+                file = f
+                print("[GridDetect] Opened file from URL")
+            } else if let existing = self.audioFiles[track.id] {
+                // Security scope may have expired — copy format and read from existing
+                let url = existing.url
+                if let f = try? AVAudioFile(forReading: url) {
+                    file = f
+                    print("[GridDetect] Opened file from audioFiles URL")
+                }
+            }
+
+            guard let file = file else {
+                print("[GridDetect] Failed to open any file")
+                DispatchQueue.main.async { self.isDetectingGrid = false }
+                return
+            }
+
+            let sampleRate = file.processingFormat.sampleRate
+            let totalFrames = Int(file.length)
+            guard totalFrames > 0 else {
+                print("[GridDetect] Empty file")
+                DispatchQueue.main.async { self.isDetectingGrid = false }
+                return
+            }
+
+            // Analysis window: 5ms for precise transient detection
+            let windowFrames = Int(sampleRate * 0.005)
+            let bufferCapacity = AVAudioFrameCount(windowFrames * 200)
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: bufferCapacity) else {
+                print("[GridDetect] Failed to create buffer")
+                DispatchQueue.main.async { self.isDetectingGrid = false }
+                return
+            }
+
+            // Scan first 10 seconds
+            let maxScanFrames = min(totalFrames, Int(sampleRate * 10))
+
+            struct WindowPeak {
+                let time: Double
+                let amplitude: Float
+            }
+            var peaks: [WindowPeak] = []
+
+            file.framePosition = 0
+            var scannedFrames = 0
+            while scannedFrames < maxScanFrames {
+                buffer.frameLength = 0
+                let remaining = AVAudioFrameCount(maxScanFrames - scannedFrames)
+                guard remaining > 0 else { break }
+                do {
+                    try file.read(into: buffer, frameCount: min(bufferCapacity, remaining))
+                } catch { break }
+                guard buffer.frameLength > 0, let channelData = buffer.floatChannelData else { break }
+
+                let frameLen = Int(buffer.frameLength)
+                let channelCount = Int(buffer.format.channelCount)
+                var pos = 0
+                while pos + windowFrames <= frameLen {
+                    var maxAmp: Float = 0
+                    for ch in 0..<channelCount {
+                        let ptr = channelData[ch].advanced(by: pos)
+                        var peak: Float = 0
+                        vDSP_maxv(ptr, 1, &peak, vDSP_Length(windowFrames))
+                        var negPeak: Float = 0
+                        vDSP_minv(ptr, 1, &negPeak, vDSP_Length(windowFrames))
+                        maxAmp = max(maxAmp, max(peak, -negPeak))
+                    }
+                    let time = Double(scannedFrames + pos) / sampleRate
+                    peaks.append(WindowPeak(time: time, amplitude: maxAmp))
+                    pos += windowFrames
+                }
+                scannedFrames += frameLen
+            }
+
+            print("[GridDetect] Collected \(peaks.count) windows")
+
+            guard !peaks.isEmpty else {
+                DispatchQueue.main.async { self.isDetectingGrid = false }
+                return
+            }
+            let globalPeak = peaks.map(\.amplitude).max() ?? 0
+            print("[GridDetect] Global peak amplitude: \(globalPeak)")
+            guard globalPeak > 0 else {
+                DispatchQueue.main.async { self.isDetectingGrid = false }
+                return
+            }
+
+            // Find transients: windows where amplitude jumps above threshold
+            let onsetThreshold = globalPeak * 0.2
+            var transients: [WindowPeak] = []
+            let minGap = 0.03 // min 30ms between transients
+
+            for p in peaks {
+                guard p.amplitude >= onsetThreshold else { continue }
+                if let last = transients.last, p.time - last.time < minGap { continue }
+                transients.append(p)
+            }
+
+            print("[GridDetect] Found \(transients.count) transients")
+            for (i, t) in transients.prefix(10).enumerated() {
+                print("[GridDetect]   #\(i): time=\(String(format: "%.3f", t.time))s amp=\(String(format: "%.4f", t.amplitude))")
+            }
+
+            guard !transients.isEmpty else {
+                DispatchQueue.main.async { self.isDetectingGrid = false }
+                return
+            }
+
+            var detectedOffset: Double = transients[0].time
+
+            if isClick && transients.count >= 3 {
+                // Click track: measure actual BPM from click intervals
+                var intervals: [Double] = []
+                for i in 1..<min(transients.count, 20) {
+                    let interval = transients[i].time - transients[i - 1].time
+                    // Only consider reasonable intervals (30-300 BPM range)
+                    if interval > 0.2 && interval < 2.0 {
+                        intervals.append(interval)
+                    }
+                }
+
+                print("[GridDetect] Click intervals: \(intervals.prefix(10).map { String(format: "%.3f", $0) })")
+
+                if !intervals.isEmpty {
+                    // Median interval = beat duration
+                    let sortedIntervals = intervals.sorted()
+                    let medianInterval = sortedIntervals[sortedIntervals.count / 2]
+                    var measuredBpm = 60.0 / medianInterval
+
+                    // Fix double/half BPM: if measured is ~2x or ~0.5x the configured, adjust
+                    if detectionBpm > 0 {
+                        let ratio = measuredBpm / detectionBpm
+                        if ratio > 1.8 && ratio < 2.2 {
+                            // Detected double — clicks have subdivisions or double hits
+                            measuredBpm /= 2.0
+                            print("[GridDetect] Corrected double BPM: \(String(format: "%.1f", measuredBpm * 2)) -> \(String(format: "%.1f", measuredBpm))")
+                        } else if ratio > 0.45 && ratio < 0.55 {
+                            // Detected half — accent-only pattern
+                            measuredBpm *= 2.0
+                            print("[GridDetect] Corrected half BPM: \(String(format: "%.1f", measuredBpm / 2)) -> \(String(format: "%.1f", measuredBpm))")
+                        }
+                    }
+
+                    print("[GridDetect] Measured BPM from clicks: \(String(format: "%.1f", measuredBpm)) (configured: \(detectionBpm))")
+
+                    // Only correct if measured differs meaningfully but is in a reasonable range
+                    if abs(measuredBpm - detectionBpm) > 0.5 && abs(measuredBpm - detectionBpm) < 20 {
+                        print("[GridDetect] BPM correction: \(String(format: "%.1f", detectionBpm)) -> \(String(format: "%.1f", measuredBpm))")
+                        DispatchQueue.main.async {
+                            self.originalBpm = measuredBpm
+                            self.bpm = measuredBpm
+                        }
+                    }
+                }
+
+                // Find accent (loudest click = beat 1)
+                // Look at amplitude of each transient — accent is noticeably louder
+                let avgAmp = transients.prefix(12).map(\.amplitude).reduce(0, +) / Float(min(transients.count, 12))
+                let accentThreshold = avgAmp * 1.15 // accent is at least 15% louder than average
+
+                // Find first accent
+                let accents = transients.prefix(20).filter { $0.amplitude > accentThreshold }
+                print("[GridDetect] Avg click amp: \(String(format: "%.4f", avgAmp)), accent threshold: \(String(format: "%.4f", accentThreshold))")
+                print("[GridDetect] Accents found: \(accents.count)")
+                for (i, a) in accents.prefix(5).enumerated() {
+                    print("[GridDetect]   Accent #\(i): time=\(String(format: "%.3f", a.time))s amp=\(String(format: "%.4f", a.amplitude))")
+                }
+
+                if let firstAccent = accents.first {
+                    detectedOffset = firstAccent.time
+                } else {
+                    // No clear accent — use first transient
+                    detectedOffset = transients[0].time
+                }
+            }
+
+            let offset = min(detectedOffset, 5.0)
+            print("[GridDetect] Final offset: \(String(format: "%.3f", offset))s")
+
+            DispatchQueue.main.async {
+                self.gridOffset = offset
+                self.isDetectingGrid = false
+                self.gridDetected = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    self.gridDetected = false
+                }
+            }
+        }
+    }
+
     func play() {
         guard !isPlaying else { return }
         guard !playerNodes.isEmpty else { return }
@@ -261,10 +505,12 @@ class AudioEngineManager: ObservableObject {
             }
         }
 
+        let seekTime = playFrom
+
         for (trackID, player) in playerNodes {
             guard let file = audioFiles[trackID] else { continue }
             let sampleRate = file.processingFormat.sampleRate
-            let offsetFrames = AVAudioFramePosition(startOffset * sampleRate)
+            let offsetFrames = AVAudioFramePosition(seekTime * sampleRate)
             let totalFrames = file.length
             let startFrame = min(offsetFrames, totalFrames)
             let frameCount = AVAudioFrameCount(totalFrames - startFrame)
@@ -279,7 +525,7 @@ class AudioEngineManager: ObservableObject {
             player.play()
         }
 
-        currentTime = startOffset
+        currentTime = seekTime
         autoFadeTriggered = false
         isPlaying = true
         startTimeTracking()
@@ -313,7 +559,8 @@ class AudioEngineManager: ObservableObject {
         }
         isPlaying = false
         isPaused = false
-        currentTime = 0
+        playFrom = startOffset
+        currentTime = startOffset
         autoFadeTriggered = false
         transitionTriggered = false
         stopTimeTracking()
@@ -331,7 +578,14 @@ class AudioEngineManager: ObservableObject {
 
     func seekTo(_ time: TimeInterval) {
         guard !isPlaying else { return }
-        startOffset = time
+        // If paused, need full re-seek on next play
+        if isPaused {
+            isPaused = false
+            for player in playerNodes.values {
+                player.stop()
+            }
+        }
+        playFrom = time
         currentTime = time
     }
 
@@ -353,7 +607,7 @@ class AudioEngineManager: ObservableObject {
             }
             player.play()
         }
-        startOffset = time
+        playFrom = time
         currentTime = time
     }
 
@@ -527,7 +781,7 @@ class AudioEngineManager: ObservableObject {
               let playerTime = firstPlayer.playerTime(forNodeTime: nodeTime) else { return }
 
         let sampleRate = playerTime.sampleRate
-        let time = Double(playerTime.sampleTime) / sampleRate + startOffset
+        let time = Double(playerTime.sampleTime) / sampleRate + playFrom
 
         DispatchQueue.main.async {
             if time >= 0 {

@@ -26,7 +26,16 @@ App iOS para mezcla de audio multitrack en vivo. Diseñada para músicos que nec
 - Playhead arrastrable cuando la reproducción está detenida (sin afectar configuración de tiempo)
 - Controles de tiempo: inicio, fin y auto-fade configurables
 - Navegación entre sesiones (anterior/siguiente)
-- Líneas de compás basadas en BPM y signatura de tiempo
+- Líneas de compás basadas en BPM original y signatura de tiempo (no se deforman al cambiar tempo)
+
+### Alineación de Grilla (Grid Offset)
+- Detección automática del offset de grilla al importar una sesión
+- Si hay click track: detecta el acento (beat 1) analizando transientes y amplitudes
+- Medición automática de BPM real desde los intervalos del click
+- Corrección automática de BPM doble/mitad (ej. si detecta 255 en vez de 128, corrige a 127.5)
+- Slider manual de ajuste fino (0-5s, paso de 0.01s) en Configuración > General > Grilla
+- Botón "Detectar Automáticamente" con indicador de carga y palomita de confirmación
+- Se guarda por sesión en `session_config.json`
 
 ### Zoom de Waveform
 - 3 niveles de zoom con resolución progresiva:
@@ -95,7 +104,7 @@ App iOS para mezcla de audio multitrack en vivo. Diseñada para músicos que nec
 
 ### Configuración (Panel Lateral)
 - Menú de configuración con panel lateral dividido en secciones:
-  - **General**: Fade, Transición, Guardar/Compartir
+  - **General**: Fade, Grilla (offset + detección automática), Transición, Guardar/Compartir
   - **Paneo**: Control L/R por pista con indicador de modificación
   - **EQ**: Ecualizador por pista con indicador de modificación
 - Indicadores visuales (punto naranja) cuando paneo o EQ han sido modificados
@@ -104,7 +113,7 @@ App iOS para mezcla de audio multitrack en vivo. Diseñada para músicos que nec
 - Archivo `session_config.json` por sesión dentro de cada carpeta
 - Se crea automáticamente si no existe al cargar la sesión
 - **Marcadores**: se guardan con botón dedicado junto al modo edición
-- **Guardar Pista Actual**: guarda BPM, tono, signatura, volúmenes, pan, mute/solo, EQ por pista, tiempos de inicio/fin, auto-fade, fade duration, volumen master, modo de transición
+- **Guardar Pista Actual**: guarda BPM, tono, signatura, volúmenes, pan, mute/solo, EQ por pista, tiempos de inicio/fin, auto-fade, fade duration, volumen master, modo de transición, grid offset
 - **Compartir Pista Actual**: exporta la carpeta de la sesión actual como ZIP
 - **Compartir Sesión Completa**: exporta todas las sesiones cargadas en un único ZIP (al descomprimir se conservan todas las carpetas)
 - Al abrir una sesión se restauran todos los valores guardados

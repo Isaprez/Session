@@ -10,9 +10,11 @@ struct WaveformBar: View {
     var isGeneratingWaveform: Bool = false
     let onSeek: (CGFloat) -> Void
     var bpm: Double = 0
+    var originalBpm: Double = 0
     var timeSignatureNumerator: Int = 4
     var timeSignatureDenominator: Int = 4
     var duration: TimeInterval = 0
+    var gridOffset: TimeInterval = 0
     @Binding var markers: [SectionMarker]
     var isEditMode: Bool = false
     var onAddMarker: ((Double) -> Void)?
@@ -50,8 +52,9 @@ struct WaveformBar: View {
     }
 
     private func computeZoomScale(viewWidth: CGFloat) -> CGFloat {
-        guard zoomLevel > 0, bpm > 0, duration > 0 else { return 1.0 }
-        let beatDuration = 60.0 / bpm
+        let zoomBpm = originalBpm > 0 ? originalBpm : bpm
+        guard zoomLevel > 0, zoomBpm > 0, duration > 0 else { return 1.0 }
+        let beatDuration = 60.0 / zoomBpm
         let measureDuration = Double(timeSignatureNumerator) * beatDuration * (4.0 / Double(timeSignatureDenominator))
         let measuresCount = duration / measureDuration
         guard measuresCount > 0 else { return 1.0 }
@@ -122,12 +125,15 @@ struct WaveformBar: View {
                         context.fill(Path(rect), with: .color(color.opacity(0.08)))
                     }
 
-                    // Measure grid lines + beat subdivisions
-                    if bpm > 0 && duration > 0 {
-                        let beatDuration = (60.0 / bpm) * (4.0 / Double(timeSignatureDenominator))
+                    // Measure grid lines + beat subdivisions (use originalBpm to match waveform)
+                    let gridBpm = originalBpm > 0 ? originalBpm : bpm
+                    if gridBpm > 0 && duration > 0 {
+                        let beatDuration = (60.0 / gridBpm) * (4.0 / Double(timeSignatureDenominator))
                         let measureDuration = Double(timeSignatureNumerator) * beatDuration
+                        let gOff = gridOffset
                         if measureDuration > 0 {
-                            var t = measureDuration
+                            // Measure lines starting from gridOffset (beat 1)
+                            var t = gOff
                             while t < duration {
                                 let x = CGFloat(t / duration) * cw - ox
                                 if x > size.width { break }
@@ -141,7 +147,7 @@ struct WaveformBar: View {
                             }
 
                             if isZoomed {
-                                var measureStart: Double = 0
+                                var measureStart = gOff
                                 while measureStart < duration {
                                     for beat in 1..<timeSignatureNumerator {
                                         let beatTime = measureStart + Double(beat) * beatDuration
@@ -358,6 +364,7 @@ struct TransportBar: View {
     var originalKey: String
     var timeSignatureNumerator: Int
     var timeSignatureDenominator: Int
+    var gridOffset: TimeInterval = 0
 
     @State private var blinkVisible = true
     @Binding var showSessionMenu: Bool
@@ -529,9 +536,11 @@ struct TransportBar: View {
                         onSeek(seekTime)
                     },
                     bpm: bpm,
+                    originalBpm: originalBpm,
                     timeSignatureNumerator: timeSignatureNumerator,
                     timeSignatureDenominator: timeSignatureDenominator,
                     duration: maxDuration,
+                    gridOffset: gridOffset,
                     markers: $markers,
                     isEditMode: isEditMode,
                     onAddMarker: { position in

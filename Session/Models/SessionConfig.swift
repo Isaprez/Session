@@ -13,6 +13,9 @@ struct SessionConfig: Codable {
     var autoFadeAt: Double
     var fadeDuration: Float
 
+    // Grid
+    var gridOffset: Double?
+
     // Transition
     var transitionMode: String?
     var transitionDuration: Float?

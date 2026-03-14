@@ -135,6 +135,48 @@ struct SettingsView: View {
                 .padding(.vertical, 4)
             }
 
+            Section("Grilla") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Offset de Grilla")
+                            .font(.subheadline)
+                        Spacer()
+                        Text(String(format: "%.2f s", audioEngine.gridOffset))
+                            .font(.system(.subheadline, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+                    Slider(value: Binding(
+                        get: { audioEngine.gridOffset },
+                        set: { audioEngine.gridOffset = $0 }
+                    ), in: 0...5, step: 0.01)
+                    .tint(.accentColor)
+
+                    Text("Ajusta para alinear las líneas de compás con el audio")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 4)
+
+                Button {
+                    audioEngine.autoDetectGridOffset()
+                } label: {
+                    HStack {
+                        Label("Detectar Automáticamente", systemImage: "wand.and.stars")
+                            .font(.subheadline)
+                        Spacer()
+                        if audioEngine.isDetectingGrid {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        } else if audioEngine.gridDetected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .transition(.scale.combined(with: .opacity))
+                        }
+                    }
+                }
+                .disabled(audioEngine.isDetectingGrid)
+            }
+
             Section("Transición") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Modo de Transición")
@@ -307,6 +349,7 @@ struct SettingsView: View {
             endTime: audioEngine.endTime,
             autoFadeAt: audioEngine.autoFadeAt,
             fadeDuration: audioEngine.fadeDuration,
+            gridOffset: audioEngine.gridOffset,
             transitionMode: audioEngine.transitionMode.rawValue,
             transitionDuration: audioEngine.transitionDuration,
             masterVolume: audioEngine.masterVolume,

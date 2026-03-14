@@ -164,6 +164,7 @@ struct ContentView: View {
                     originalKey: audioEngine.originalKey,
                     timeSignatureNumerator: audioEngine.timeSignatureNumerator,
                     timeSignatureDenominator: audioEngine.timeSignatureDenominator,
+                    gridOffset: audioEngine.gridOffset,
                     showSessionMenu: $showSessionMenu,
                     showTimeMenu: $showTimeMenu,
                     showBpmMenu: $showBpmMenu,
@@ -551,6 +552,7 @@ struct ContentView: View {
         audioEngine.endTime = config.endTime
         audioEngine.autoFadeAt = config.autoFadeAt
         audioEngine.fadeDuration = config.fadeDuration
+        audioEngine.gridOffset = config.gridOffset ?? 0
         audioEngine.masterVolume = config.masterVolume
         let loadedMode = TransitionMode(rawValue: config.transitionMode ?? "stop") ?? .stop
         audioEngine.transitionMode = loadedMode
