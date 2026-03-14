@@ -41,11 +41,16 @@ class AudioEngineManager: ObservableObject {
     @Published var trackLevels: [UUID: Float] = [:]
     @Published var masterLevel: Float = 0
     @Published var levelHistory: [Float] = []
-    private let levelHistorySlots = 200
+    private let levelHistorySlots = 1200
     @Published var startOffset: TimeInterval = 0
     @Published var endTime: TimeInterval = 0 // 0 = use full duration
     @Published var autoFadeAt: TimeInterval = 0 // 0 = disabled
     private var autoFadeTriggered = false
+
+    // Section repeat
+    @Published var isRepeatingSection = false
+    var repeatSectionStart: TimeInterval = 0
+    var repeatSectionEnd: TimeInterval = 0
 
     private var displayLink: CADisplayLink?
     private var startSampleTime: AVAudioFramePosition = 0
@@ -136,6 +141,8 @@ class AudioEngineManager: ObservableObject {
         var waveform = Array(repeating: Float(0), count: slots)
 
         for track in session.tracks {
+            // Skip click tracks from waveform display
+            if track.isClick { continue }
             guard let file = try? AVAudioFile(forReading: track.fileURL) else { continue }
             let totalFrames = file.length
             let framesPerSlot = max(totalFrames / Int64(slots), 1)
@@ -176,8 +183,11 @@ class AudioEngineManager: ObservableObject {
             totalRMS += sqrtf(sum / Float(frameLength))
         }
         let avgRMS = totalRMS / Float(channelCount)
-        // Convert to 0...1 range (clamp)
-        return min(avgRMS * 1.8, 1.0)
+        // Logarithmic scaling for more expressive waveform
+        let db = 20 * log10(max(avgRMS, 1e-6))
+        // Map -40dB...0dB to 0...1
+        let normalized = (db + 40) / 40
+        return min(max(normalized, 0), 1.0)
     }
 
     func play() {
@@ -261,6 +271,28 @@ class AudioEngineManager: ObservableObject {
 
     func seekTo(_ time: TimeInterval) {
         guard !isPlaying else { return }
+        startOffset = time
+        currentTime = time
+    }
+
+    func seekWhilePlaying(to time: TimeInterval) {
+        guard isPlaying else { return }
+        // Stop all players and reschedule from the new time
+        for player in playerNodes.values {
+            player.stop()
+        }
+        for (trackID, player) in playerNodes {
+            guard let file = audioFiles[trackID] else { continue }
+            let sampleRate = file.processingFormat.sampleRate
+            let offsetFrames = AVAudioFramePosition(time * sampleRate)
+            let totalFrames = file.length
+            let startFrame = min(offsetFrames, totalFrames)
+            let frameCount = AVAudioFrameCount(totalFrames - startFrame)
+            if frameCount > 0 {
+                player.scheduleSegment(file, startingFrame: startFrame, frameCount: frameCount, at: nil)
+            }
+            player.play()
+        }
         startOffset = time
         currentTime = time
     }
@@ -438,6 +470,13 @@ class AudioEngineManager: ObservableObject {
         DispatchQueue.main.async {
             if time >= 0 {
                 self.currentTime = time
+            }
+
+            // Section repeat: when time passes section end, jump back and disable
+            if self.isRepeatingSection && self.repeatSectionEnd > 0 && time >= self.repeatSectionEnd {
+                self.isRepeatingSection = false
+                self.seekWhilePlaying(to: self.repeatSectionStart)
+                return
             }
 
             // Auto fade at specific time

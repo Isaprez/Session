@@ -1,5 +1,19 @@
 import Foundation
 
+// MARK: - Song Section Marker
+
+struct SectionMarker: Identifiable, Equatable {
+    let id = UUID()
+    var name: String
+    var position: Double // 0...1 percentage of total duration
+
+    static let sectionNames = [
+        "Start", "Intro", "Verso 1", "Verso 2", "Verso 3",
+        "Pre-coro", "Coro", "Coro 2", "Puente", "Solo",
+        "Interludio", "Breakdown", "Build", "Drop", "Outro"
+    ]
+}
+
 struct Track: Identifiable {
     let id = UUID()
     let name: String

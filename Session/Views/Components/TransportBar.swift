@@ -5,53 +5,234 @@ struct WaveformBar: View {
     let levelHistory: [Float]
     let isPlaying: Bool
     let onSeek: (CGFloat) -> Void
+    var bpm: Double = 0
+    var timeSignatureNumerator: Int = 4
+    var timeSignatureDenominator: Int = 4
+    var duration: TimeInterval = 0
+    @Binding var markers: [SectionMarker]
+    var isEditMode: Bool = false
+    var onAddMarker: ((Double) -> Void)?
+    var zoomLevel: Int = 0
+
+    // Color assigned per unique name
+    private static let nameColors: [String: Color] = {
+        let colors: [Color] = [
+            .blue, .purple, .orange, .teal, .pink,
+            .indigo, .mint, .cyan, .yellow, .red,
+            .green, .brown, .gray, .red.opacity(0.7), .blue.opacity(0.7)
+        ]
+        var map: [String: Color] = [:]
+        for (i, name) in SectionMarker.sectionNames.enumerated() {
+            map[name] = colors[i % colors.count]
+        }
+        return map
+    }()
+
+    private static func colorFor(_ name: String) -> Color {
+        nameColors[name] ?? .white
+    }
+
+    @State private var draggingMarkerId: UUID? = nil
+
+    private func computeZoomScale(viewWidth: CGFloat) -> CGFloat {
+        guard zoomLevel > 0, bpm > 0, duration > 0 else { return 1.0 }
+        let beatDuration = 60.0 / bpm
+        let measureDuration = Double(timeSignatureNumerator) * beatDuration * (4.0 / Double(timeSignatureDenominator))
+        let measuresCount = duration / measureDuration
+        guard measuresCount > 0 else { return 1.0 }
+        let currentMeasureWidth = viewWidth / CGFloat(measuresCount)
+        guard currentMeasureWidth > 0 else { return 1.0 }
+        // Target: zoom 1 ≈ 30pt per measure (~5mm), zoom 2 ≈ 60pt (~1cm)
+        let targetWidth: CGFloat = zoomLevel == 1 ? 30 : 60
+        return max(targetWidth / currentMeasureWidth, 1.0)
+    }
+
+    private func scrollOff(viewWidth: CGFloat) -> CGFloat {
+        let scale = computeZoomScale(viewWidth: viewWidth)
+        let cw = viewWidth * scale
+        guard zoomLevel > 0 else { return 0 }
+        let fixedX = viewWidth * 0.05
+        let currentX = progress * cw
+        let maxOffset = cw - viewWidth
+        return min(max(currentX - fixedX, 0), max(maxOffset, 0))
+    }
 
     var body: some View {
         GeometryReader { geo in
-            let w = geo.size.width
+            let viewWidth = geo.size.width
             let h = geo.size.height
+            let sorted = markers.sorted { $0.position < $1.position }
+            let scale = computeZoomScale(viewWidth: viewWidth)
+            let contentWidth = viewWidth * scale
+            let isZoomed = zoomLevel > 0
+            let scrollOffset = scrollOff(viewWidth: viewWidth)
 
             ZStack {
                 // Background
                 RoundedRectangle(cornerRadius: 6)
                     .fill(Color.secondary.opacity(0.12))
 
-                // Waveform
+                // Everything rendered in a single Canvas (no layout overflow)
                 Canvas { context, size in
-                    let count = levelHistory.count
-                    guard count > 0 else { return }
+                    let cw = size.width * scale
+                    let ox = scrollOffset
 
-                    let slotWidth = size.width / CGFloat(count)
-                    let midY = size.height / 2
-
-                    for (i, level) in levelHistory.enumerated() {
-                        let x = CGFloat(i) * slotWidth + slotWidth / 2
-                        let barH = max(CGFloat(level) * size.height * 0.9, 1)
-
-                        let rect = CGRect(
-                            x: x - slotWidth / 2 + 0.5,
-                            y: midY - barH / 2,
-                            width: max(slotWidth - 1, 1),
-                            height: barH
-                        )
-                        let color: Color = CGFloat(i) / CGFloat(count) <= progress ? .green : .green.opacity(0.25)
-                        context.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(color))
+                    // Section color bands
+                    for (i, marker) in sorted.enumerated() {
+                        let startX = CGFloat(marker.position) * cw - ox
+                        let endX = (i + 1 < sorted.count
+                            ? CGFloat(sorted[i + 1].position) * cw
+                            : cw) - ox
+                        guard endX > 0 && startX < size.width else { continue }
+                        let color = Self.colorFor(marker.name)
+                        let rect = CGRect(x: max(startX, 0), y: 0, width: min(endX, size.width) - max(startX, 0), height: size.height)
+                        context.fill(Path(rect), with: .color(color.opacity(0.08)))
                     }
+
+                    // Measure grid lines + beat subdivisions
+                    if bpm > 0 && duration > 0 {
+                        let beatDuration = (60.0 / bpm) * (4.0 / Double(timeSignatureDenominator))
+                        let measureDuration = Double(timeSignatureNumerator) * beatDuration
+                        if measureDuration > 0 {
+                            var t = measureDuration
+                            while t < duration {
+                                let x = CGFloat(t / duration) * cw - ox
+                                if x > size.width { break }
+                                if x >= 0 {
+                                    var line = Path()
+                                    line.move(to: CGPoint(x: x, y: 0))
+                                    line.addLine(to: CGPoint(x: x, y: size.height))
+                                    context.stroke(line, with: .color(.white.opacity(0.08)), lineWidth: 1)
+                                }
+                                t += measureDuration
+                            }
+
+                            if isZoomed {
+                                var measureStart: Double = 0
+                                while measureStart < duration {
+                                    for beat in 1..<timeSignatureNumerator {
+                                        let beatTime = measureStart + Double(beat) * beatDuration
+                                        if beatTime >= duration { break }
+                                        let x = CGFloat(beatTime / duration) * cw - ox
+                                        if x > size.width { break }
+                                        if x >= 0 {
+                                            var line = Path()
+                                            line.move(to: CGPoint(x: x, y: 0))
+                                            line.addLine(to: CGPoint(x: x, y: size.height))
+                                            context.stroke(line, with: .color(.white.opacity(0.04)), lineWidth: 0.5)
+                                        }
+                                    }
+                                    measureStart += measureDuration
+                                }
+                            }
+                        }
+                    }
+
+                    // Waveform bars (only visible range)
+                    let count = levelHistory.count
+                    if count > 0 {
+                        let slotWidth = cw / CGFloat(count)
+                        let midY = size.height / 2
+                        let firstSlot = max(Int(floor(ox / slotWidth)) - 1, 0)
+                        let lastSlot = min(Int(ceil((ox + size.width) / slotWidth)) + 1, count - 1)
+
+                        if firstSlot <= lastSlot {
+                            for i in firstSlot...lastSlot {
+                                let level = levelHistory[i]
+                                let x = CGFloat(i) * slotWidth + slotWidth / 2 - ox
+                                let barH = max(CGFloat(level) * size.height * 0.9, 1)
+                                let barW = max(slotWidth - 1, 1)
+                                let rect = CGRect(x: x - barW / 2, y: midY - barH / 2, width: barW, height: barH)
+                                let played = CGFloat(i) / CGFloat(count) <= progress
+                                context.fill(
+                                    Path(roundedRect: rect, cornerRadius: 1),
+                                    with: .color(played ? .green : .green.opacity(0.25))
+                                )
+                            }
+                        }
+                    }
+
+                    // Marker lines and labels
+                    for marker in sorted {
+                        let x = CGFloat(marker.position) * cw - ox
+                        guard x > -30 && x < size.width + 30 else { continue }
+                        let color = Self.colorFor(marker.name)
+
+                        if marker.position > 0 {
+                            var line = Path()
+                            line.move(to: CGPoint(x: x, y: 0))
+                            line.addLine(to: CGPoint(x: x, y: size.height))
+                            context.stroke(line, with: .color(color.opacity(0.6)), lineWidth: 1)
+                        }
+
+                        context.draw(
+                            Text(marker.name)
+                                .font(.system(size: 7, weight: .bold))
+                                .foregroundColor(color),
+                            at: CGPoint(x: x + 20, y: 7),
+                            anchor: .center
+                        )
+                    }
+
+                    // Playhead
+                    let playheadX = isZoomed ? progress * cw - ox : progress * size.width
+                    let clampedPH = max(min(playheadX, size.width), 1)
+                    var playLine = Path()
+                    playLine.move(to: CGPoint(x: clampedPH, y: 0))
+                    playLine.addLine(to: CGPoint(x: clampedPH, y: size.height))
+                    context.stroke(playLine, with: .color(.white), lineWidth: 2)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 6))
 
-                // Playhead line
-                Rectangle()
-                    .fill(Color.white)
-                    .frame(width: 2, height: h)
-                    .position(x: max(w * progress, 1), y: h / 2)
-                    .shadow(color: .black.opacity(0.5), radius: 2)
+                // Drag handles for markers (edit mode only)
+                if isEditMode {
+                    ForEach(sorted, id: \.id) { marker in
+                        if marker.name != "Start" {
+                            let x = CGFloat(marker.position) * contentWidth - scrollOffset
+                            if x > -5 && x < viewWidth + 5 {
+                                Circle()
+                                    .fill(Self.colorFor(marker.name))
+                                    .frame(width: 10, height: 10)
+                                    .shadow(color: .black.opacity(0.5), radius: 2)
+                                    .position(x: x, y: h - 5)
+                                    .gesture(
+                                        DragGesture()
+                                            .onChanged { value in
+                                                let newPct = min(max(Double((value.location.x + scrollOffset) / contentWidth), 0.01), 0.99)
+                                                if let idx = markers.firstIndex(where: { $0.id == marker.id }) {
+                                                    markers[idx].position = newPct
+                                                }
+                                            }
+                                    )
+                            }
+                        }
+                    }
+                }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) {
+                if isEditMode {
+                    let off = scrollOff(viewWidth: viewWidth)
+                    // Position computed in gesture overlay
+                }
+            }
+            .simultaneousGesture(
+                SpatialTapGesture(count: 2)
+                    .onEnded { value in
+                        if isEditMode {
+                            let off = scrollOff(viewWidth: viewWidth)
+                            let pct = Double((value.location.x + off) / contentWidth)
+                            onAddMarker?(min(max(pct, 0), 1))
+                        }
+                    }
+            )
             .gesture(
-                isPlaying ? nil :
+                isPlaying || isEditMode ? nil :
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        let pct = min(max(value.location.x / w, 0), 1)
+                        let off = scrollOff(viewWidth: viewWidth)
+                        let pct = min(max((value.location.x + off) / contentWidth, 0), 1)
                         onSeek(pct)
                     }
             )
@@ -78,7 +259,7 @@ struct FadeIcon: View {
                 path.addLine(to: CGPoint(x: size.width, y: size.height))
                 path.closeSubpath()
             }
-            context.fill(path, with: .foreground)
+            context.stroke(path, with: .foreground, lineWidth: 1.5)
         }
     }
 }
@@ -94,6 +275,8 @@ struct TransportBar: View {
     let isFading: Bool
     let fadeMode: AudioEngineManager.FadeMode
     let onFadeTap: () -> Void
+    @Binding var isRepeatingSection: Bool
+    let onRepeatSection: () -> Void
     let onSettingsTap: () -> Void
     @Binding var startOffset: TimeInterval
     @Binding var endTime: TimeInterval
@@ -112,66 +295,76 @@ struct TransportBar: View {
     var timeSignatureDenominator: Int
 
     @State private var blinkVisible = true
-    @State private var showTimeMenu = false
-    @State private var showBpmMenu = false
-    @State private var showKeyMenu = false
+    @Binding var showTimeMenu: Bool
+    @Binding var showBpmMenu: Bool
+    @Binding var showKeyMenu: Bool
+    @Binding var markers: [SectionMarker]
+    @Binding var isEditMode: Bool
+    var onMarkerAdd: ((Double) -> Void)?
+    var onSaveMarkers: (() -> Void)?
+    @State private var zoomLevel: Int = 0
+    @State private var showMarkersSaved = false
 
     var body: some View {
         VStack(spacing: 8) {
             // Controls
-            HStack(spacing: 16) {
-                // Session menu - far left
-                Menu { sessionMenuContent } label: {
-                    Image(systemName: "line.3.horizontal")
-                        .font(.title3)
-                        .foregroundColor(.primary)
-                }
+            HStack(spacing: 6) {
+                // Session menu
+                transportButton(icon: "line.3.horizontal") {}
+                    .overlay { Menu { sessionMenuContent } label: { Color.clear } }
 
                 Spacer()
 
-                // Center transport controls
-                HStack(spacing: 16) {
-                    Button(action: onStop) {
-                        Image(systemName: "stop.fill")
-                            .font(.title3)
-                            .foregroundColor(.primary)
-                    }
-
-                    Button(action: onPrev) {
-                        Image(systemName: "backward.fill")
-                            .font(.title3)
-                            .foregroundColor(.primary)
-                    }
-
-                    Button(action: onPlayPause) {
-                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 44))
-                            .foregroundColor(.accentColor)
-                    }
-
-                    Button(action: onNext) {
-                        Image(systemName: "forward.fill")
-                            .font(.title3)
-                            .foregroundColor(.primary)
-                    }
+                // Transport controls
+                HStack(spacing: 6) {
+                    transportButton(icon: "stop", action: onStop)
+                    transportButton(icon: "backward", action: onPrev)
+                    transportButton(icon: isPlaying ? "pause" : "play", action: onPlayPause)
+                    transportButton(icon: "forward", action: onNext)
                 }
 
-                // Info buttons group
-                HStack(spacing: 8) {
+                // Info buttons
+                HStack(spacing: 6) {
+                    // Fade
                     FadeIcon(mode: fadeMode)
-                        .frame(width: 24, height: 18)
-                        .foregroundColor(isFading ? Color.orange : .primary)
-                        .opacity(isFading ? (blinkVisible ? 1.0 : 0.2) : 1.0)
+                        .frame(width: 16, height: 12)
+                        .foregroundColor(.white.opacity(0.85))
+                        .opacity(isFading ? (blinkVisible ? 1.0 : 0.3) : 1.0)
+                        .frame(width: 32, height: 32)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(6)
                         .contentShape(Rectangle())
                         .onTapGesture { onFadeTap() }
 
+                    // Repeat section
+                    Image(systemName: "repeat.1")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(
+                            markers.isEmpty
+                                ? .white.opacity(0.3)
+                                : isRepeatingSection ? .orange : .white.opacity(0.85)
+                        )
+                        .frame(width: 32, height: 32)
+                        .background(
+                            markers.isEmpty
+                                ? Color.white.opacity(0.05)
+                                : isRepeatingSection ? Color.orange.opacity(0.2) : Color.white.opacity(0.1)
+                        )
+                        .cornerRadius(6)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            guard !markers.isEmpty else { return }
+                            onRepeatSection()
+                        }
+
+                    // Time
                     Text("\(formatTime(currentTime)) / \(formatTime(duration))")
-                        .font(.system(.caption, design: .monospaced))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.secondary.opacity(0.15))
-                        .cornerRadius(8)
-                        .foregroundColor(.primary)
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.85))
+                        .frame(height: 32)
+                        .padding(.horizontal, 8)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(6)
                         .contentShape(Rectangle())
                         .onTapGesture {
                             showBpmMenu = false
@@ -179,32 +372,27 @@ struct TransportBar: View {
                             showTimeMenu.toggle()
                         }
 
-                    HStack(spacing: 2) {
-                        Text("\(Int(bpm))")
-                            .font(.system(.caption, design: .monospaced).bold())
-                            .foregroundColor(bpm != originalBpm ? .orange : .primary)
-                        Text("bpm")
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(Color.secondary.opacity(0.15))
-                    .cornerRadius(8)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        showTimeMenu = false
-                        showKeyMenu = false
-                        showBpmMenu.toggle()
-                    }
+                    // BPM
+                    Text("\(Int(bpm))")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(bpm != originalBpm ? .orange : .white.opacity(0.85))
+                        .frame(width: 32, height: 32)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(6)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            showTimeMenu = false
+                            showKeyMenu = false
+                            showBpmMenu.toggle()
+                        }
 
+                    // Key
                     Text(musicalKey)
-                        .font(.system(.caption, design: .rounded).bold())
-                        .foregroundColor(musicalKey != originalKey ? .orange : .primary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.secondary.opacity(0.15))
-                        .cornerRadius(8)
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundColor(musicalKey != originalKey ? .orange : .white.opacity(0.85))
+                        .frame(width: 32, height: 32)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(6)
                         .contentShape(Rectangle())
                         .onTapGesture {
                             showTimeMenu = false
@@ -215,70 +403,93 @@ struct TransportBar: View {
 
                 Spacer()
 
-                // Settings - far right
-                Button(action: onSettingsTap) {
-                    Image(systemName: "gearshape.fill")
-                        .font(.title3)
-                        .foregroundColor(.primary)
+                // Edit mode
+                Image(systemName: "pencil")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(isEditMode ? .orange : .white.opacity(0.85))
+                    .frame(width: 32, height: 32)
+                    .background(isEditMode ? Color.orange.opacity(0.2) : Color.white.opacity(0.1))
+                    .cornerRadius(6)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        isEditMode.toggle()
+                        if isEditMode && markers.isEmpty {
+                            markers.append(SectionMarker(name: "Start", position: 0))
+                        }
+                    }
+
+                // Save markers (visible when markers exist)
+                if !markers.isEmpty {
+                    Image(systemName: showMarkersSaved ? "checkmark" : "square.and.arrow.down")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(showMarkersSaved ? .green : .white.opacity(0.85))
+                        .frame(width: 32, height: 32)
+                        .background(showMarkersSaved ? Color.green.opacity(0.2) : Color.white.opacity(0.1))
+                        .cornerRadius(6)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            onSaveMarkers?()
+                            showMarkersSaved = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                showMarkersSaved = false
+                            }
+                        }
                 }
+
+                // Settings
+                transportButton(icon: "gearshape", action: onSettingsTap)
             }
             .padding(.horizontal)
 
-            // Waveform progress bar
-            WaveformBar(
-                progress: duration > 0 ? CGFloat(currentTime / duration) : 0,
-                levelHistory: levelHistory,
-                isPlaying: isPlaying,
-                onSeek: { pct in
-                    let seekTime = Double(pct) * maxDuration
-                    startOffset = seekTime
-                    onSeek(seekTime)
-                }
-            )
-            .frame(height: 28)
+            // Waveform progress bar + zoom button
+            HStack(spacing: 6) {
+                WaveformBar(
+                    progress: duration > 0 ? CGFloat(currentTime / duration) : 0,
+                    levelHistory: levelHistory,
+                    isPlaying: isPlaying,
+                    onSeek: { pct in
+                        let seekTime = Double(pct) * maxDuration
+                        startOffset = seekTime
+                        onSeek(seekTime)
+                    },
+                    bpm: bpm,
+                    timeSignatureNumerator: timeSignatureNumerator,
+                    timeSignatureDenominator: timeSignatureDenominator,
+                    duration: maxDuration,
+                    markers: $markers,
+                    isEditMode: isEditMode,
+                    onAddMarker: { position in
+                        onMarkerAdd?(position)
+                    },
+                    zoomLevel: zoomLevel
+                )
+                .frame(height: 44)
+
+                // Zoom button at waveform level
+                Image(systemName: "plus.magnifyingglass")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(zoomLevel > 0 ? .orange : .white.opacity(0.85))
+                    .frame(width: 32, height: 32)
+                    .background(zoomLevel > 0 ? Color.orange.opacity(0.2) : Color.white.opacity(0.1))
+                    .cornerRadius(6)
+                    .overlay(
+                        zoomLevel > 0 ?
+                            Text("\(zoomLevel)")
+                                .font(.system(size: 7, weight: .bold))
+                                .foregroundColor(.orange)
+                                .offset(x: 10, y: 10)
+                            : nil
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        zoomLevel = (zoomLevel + 1) % 3
+                    }
+            }
             .padding(.horizontal)
+
         }
         .padding(.vertical, 10)
         .background(Color(.secondarySystemGroupedBackground))
-        .overlay(alignment: .top) {
-            ZStack {
-                if showTimeMenu {
-                    TimePopover(
-                        startOffset: $startOffset,
-                        endTime: $endTime,
-                        autoFadeAt: $autoFadeAt,
-                        duration: maxDuration,
-                        onDismiss: { showTimeMenu = false }
-                    )
-                    .offset(y: -210)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
-                }
-                if showBpmMenu {
-                    BpmPopover(
-                        bpm: $bpm,
-                        originalBpm: originalBpm,
-                        timeSignatureNumerator: timeSignatureNumerator,
-                        timeSignatureDenominator: timeSignatureDenominator,
-                        onDismiss: { showBpmMenu = false }
-                    )
-                    .offset(y: -210)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
-                }
-                if showKeyMenu {
-                    KeyPopover(
-                        musicalKey: $musicalKey,
-                        originalKey: originalKey,
-                        onDismiss: { showKeyMenu = false }
-                    )
-                    .offset(y: -180)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .bottom)))
-                }
-            }
-            .animation(.easeOut(duration: 0.15), value: showTimeMenu)
-            .animation(.easeOut(duration: 0.15), value: showBpmMenu)
-            .animation(.easeOut(duration: 0.15), value: showKeyMenu)
-            .allowsHitTesting(showTimeMenu || showBpmMenu || showKeyMenu)
-        }
         .onChange(of: isFading) { fading in
             if fading {
                 startBlinking()
@@ -303,6 +514,17 @@ struct TransportBar: View {
         let minutes = Int(time) / 60
         let seconds = Int(time) % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    private func transportButton(icon: String, action: @escaping () -> Void = {}) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.white.opacity(0.85))
+                .frame(width: 32, height: 32)
+                .background(Color.white.opacity(0.1))
+                .cornerRadius(6)
+        }
     }
 }
 
@@ -428,6 +650,7 @@ struct BpmPopover: View {
     let timeSignatureNumerator: Int
     let timeSignatureDenominator: Int
     let onDismiss: () -> Void
+    @State private var bpmText: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -457,10 +680,24 @@ struct BpmPopover: View {
                 }
                 .buttonStyle(.plain)
 
-                Text("\(Int(bpm))")
+                TextField("120", text: $bpmText)
                     .font(.system(.body, design: .monospaced).bold())
                     .frame(width: 50)
                     .multilineTextAlignment(.center)
+                    .keyboardType(.numberPad)
+                    .padding(.vertical, 4)
+                    .background(Color.secondary.opacity(0.1))
+                    .cornerRadius(6)
+                    .onAppear { bpmText = "\(Int(bpm))" }
+                    .onChange(of: bpmText) { _ in
+                        if let val = Double(bpmText), val >= 20, val <= 300 {
+                            bpm = val
+                        }
+                    }
+                    .onChange(of: bpm) { _ in
+                        let newText = "\(Int(bpm))"
+                        if bpmText != newText { bpmText = newText }
+                    }
 
                 Button(action: { bpm = min(bpm + 1, 300) }) {
                     Image(systemName: "plus.circle.fill")
@@ -572,3 +809,4 @@ struct KeyPopover: View {
         .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
     }
 }
+
